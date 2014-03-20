@@ -129,54 +129,37 @@ func indexHandler(rsp http.ResponseWriter, req *http.Request) {
 // HTML handler for `/upload`:
 func uploadHandler(rsp http.ResponseWriter, req *http.Request) {
 	if req.Method != "POST" {
-		http.Error(rsp, "Method requires POST", http.StatusMethodNotAllowed)
-		return
+		panic(NewHttpError(http.StatusMethodNotAllowed, "Upload requires POST method", fmt.Errorf("Upload requires POST method")))
 	}
 
-	pnk := try(func() {
-		reader, err := req.MultipartReader()
+	reader, err := req.MultipartReader()
+	if err != nil {
+		panic(err)
+	}
+
+	// Keep reading the multipart form data and handle file uploads:
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if part.FileName() == "" {
+			continue
+		}
+
+		// Copy upload data to a local file:
+		destPath := path.Join(picsDir, part.FileName())
+		log.Printf("Accepting uploading: '%s'\n", destPath)
+
+		f, err := os.Create(destPath)
 		if err != nil {
+			panic(fmt.Errorf("Could not create local file '%s'; error: %s", destPath, err.Error()))
+		}
+		defer f.Close()
+
+		if _, err := io.Copy(f, part); err != nil {
 			panic(err)
 		}
-
-		// Keep reading the multipart form data and handle file uploads:
-		for {
-			part, err := reader.NextPart()
-			if err == io.EOF {
-				break
-			}
-			if part.FileName() == "" {
-				continue
-			}
-
-			// Copy upload data to a local file:
-			destPath := path.Join(picsDir, part.FileName())
-			log.Printf("Accepting uploading: '%s'\n", destPath)
-
-			f, err := os.Create(destPath)
-			if err != nil {
-				panic(fmt.Errorf("Could not create local file '%s'; error: %s", destPath, err.Error()))
-			}
-			defer f.Close()
-
-			if _, err := io.Copy(f, part); err != nil {
-				panic(err)
-			}
-		}
-	})
-
-	// Handle the panic:
-	if pnk != nil {
-		var msg string
-		if err, ok := pnk.(error); ok {
-			msg = err.Error()
-		} else {
-			msg = fmt.Sprint("%v", pnk)
-		}
-
-		log.Printf("ERROR: %s", msg)
-		http.Error(rsp, "500 Internal Server Error", http.StatusInternalServerError)
-		return
 	}
 
 	// 302 to `/`:
@@ -238,8 +221,7 @@ func thumbHandler(rsp http.ResponseWriter, req *http.Request) {
 
 	mimeType := getMimeType(filename)
 	if mimeType != "image/jpeg" {
-		http.Error(rsp, "400 Bad Request - mime type of thumbnail requested is not image/jpeg", http.StatusBadRequest)
-		return
+		panic(NewHttpError(http.StatusBadRequest, "mime type of thumbnail requested is not image/jpeg", fmt.Errorf("mime type of '%s' is '%s'", filename, mimeType)))
 	}
 
 	// Locate the pic and the thumbnail:
@@ -249,8 +231,7 @@ func thumbHandler(rsp http.ResponseWriter, req *http.Request) {
 	// Check if the pic file exists:
 	picFI, err := os.Stat(picPath)
 	if err != nil {
-		http.Error(rsp, "404 Not Found - could not find original image to make thumbnail of", http.StatusNotFound)
-		return
+		panic(NewHttpError(http.StatusBadRequest, "could not find original image to make thumbnail of", fmt.Errorf("cannot find image at '%s'", picPath)))
 	}
 
 	// Check if the thumbnail file exists:
@@ -265,37 +246,31 @@ func thumbHandler(rsp http.ResponseWriter, req *http.Request) {
 
 	// Create a new thumbnail:
 	{
-
 		// Open the original image:
 		pf, err := os.Open(picPath)
 		defer pf.Close()
 		if err != nil {
-			http.Error(rsp, "404 Not Found - could not open original image to make thumbnail of", http.StatusNotFound)
-			return
+			panic(NewHttpError(http.StatusNotFound, "could not open original image to make thumbnail of", fmt.Errorf("cannot open image file at '%s'", picPath)))
 		}
 		// Decode the JPEG:
 		img, err := jpeg.Decode(pf)
 		if err != nil {
-			http.Error(rsp, "400 Bad Request - image is not a proper JPEG", http.StatusBadRequest)
-			return
+			panic(NewHttpError(http.StatusBadRequest, "image is not a proper JPEG", fmt.Errorf("image file is not a JPEG: '%s'", picPath)))
 		}
 
 		// Create the thumbnail file:
 		tf, err := os.Create(thumbPath)
 		defer tf.Close()
 		if err != nil {
-			http.Error(rsp, "500 Internal Server Error - could not create thumbnail file", http.StatusNotFound)
-			return
+			panic(NewHttpError(http.StatusInternalServerError, "could not create thumbnail file", fmt.Errorf("could not create thumbnail file at '%s'; %s", thumbPath, err)))
 		}
 
-		//size := img.Bounds().Size()
-		//if size.X
+		// TODO: calculate the largest square bounds for a thumbnail to preserve aspect ratio
 
 		thumbImg := resize.Resize(img, img.Bounds(), 64, 64)
 		err = jpeg.Encode(tf, thumbImg, &jpeg.Options{Quality: 90})
 		if err != nil {
-			http.Error(rsp, "500 Internal Server Error - error while encoding JPEG", http.StatusInternalServerError)
-			return
+			panic(NewHttpError(http.StatusInternalServerError, "error while encoding JPEG", fmt.Errorf("failed encoding JPEG for '%s': %s", thumbPath, err)))
 		}
 	}
 
@@ -371,7 +346,7 @@ func main() {
 
 	// Upload handler:
 	uploadURL = pjoin(proxyRoot, "/upload")
-	mux.HandleFunc(uploadURL, uploadHandler)
+	mux.Handle(uploadURL, NewErrorHandler(uploadHandler))
 
 	// JSON list handler:
 	listURL = pjoin(proxyRoot, "/list")
@@ -387,7 +362,7 @@ func main() {
 
 	// Serve /thumbs/ requests dynamically with a filesystem-backed cache:
 	thumbsURL = pjoin(proxyRoot, "/thumbs/")
-	mux.HandleFunc(thumbsURL, thumbHandler)
+	mux.Handle(thumbsURL, NewErrorHandler(thumbHandler))
 
 	// Start the HTTP server on the listening socket:
 	log.Fatal(http.Serve(l, http.Handler(mux)))
