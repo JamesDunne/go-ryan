@@ -108,12 +108,16 @@ func indexHandler(rsp http.ResponseWriter, req *http.Request) {
 		Size    int64
 		Mime    string
 		LastMod string
+		Href    string
+		Thumb   string
 	}, len(fis))
 	for i, fi := range fis {
 		model[i].Name = fi.Name()
 		model[i].Size = fi.Size()
 		model[i].Mime = mime.TypeByExtension(path.Ext(fi.Name()))
 		model[i].LastMod = fi.ModTime().String()
+		model[i].Href = proxyRoot + "/pics/" + fi.Name()
+		model[i].Thumb = proxyRoot + "/thumbs/" + fi.Name()
 	}
 
 	// Execute the HTML template:
@@ -200,6 +204,21 @@ func deleteJsonHandler(req *http.Request) (result interface{}) {
 		panic(fmt.Errorf("Method requires POST"))
 	}
 
+	// Parse form data:
+	if err := req.ParseForm(); err != nil {
+		panic(err)
+	}
+	filename := req.Form.Get("filename")
+	if filename == "" {
+		panic(fmt.Errorf("Expecting filename form value"))
+	}
+
+	// Remove the file:
+	destPath := path.Join(picsDir, path.Base(filename))
+	if err := os.Remove(destPath); err != nil {
+		panic(err)
+	}
+
 	return struct {
 		Success bool `json:"success"`
 	}{
@@ -209,7 +228,7 @@ func deleteJsonHandler(req *http.Request) (result interface{}) {
 
 // File server for `/thumbs/*`:
 func thumbHandler(rsp http.ResponseWriter, req *http.Request) {
-
+	// TODO!
 	//req.URL
 }
 

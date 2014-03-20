@@ -22,8 +22,8 @@ th,td   { white-space: nowrap; }
         <table border="0" cellspacing="2">
             <thead>
                 <tr>
-                    <th></th>
                     <th>Image</th>
+                    <th>Name</th>
                     <th>Size</th>
                     <th>Type</th>
                     <th>Last Modified</th>
@@ -33,8 +33,8 @@ th,td   { white-space: nowrap; }
             <tbody>
 {{range .}}
                 <tr data-filename="{{.Name}}">
-                    <td>{{if eq .Mime "image/jpeg"}}<img src="/ryan/thumbs/{{.Name}}" alt="{{.Name}}" />{{end}}</td>
-                    <td>{{.Name}}</td>
+                    <td>{{if eq .Mime "image/jpeg"}}<img src="{{.Thumb}}" alt="{{.Name}}" />{{end}}</td>
+                    <td><a href="{{.Href}}" target="_blank">{{.Name}}</a></td>
                     <td style="text-align: right">{{.Size}}</td>
                     <td>{{.Mime}}</td>
                     <td>{{.LastMod}}</td>
@@ -57,9 +57,13 @@ $(function() {
 
             $.ajax({
                 type: 'POST',
-                url: link.attr('href'),
-                data: { filename: filename },
-                success: function(data) {
+                url: '/ryan/delete',
+                data: { "filename": filename },
+                success: function(result) {
+                    if (!result.success) {
+                        return false;
+                    }
+
                     tr.remove();
                     return true;
                 }

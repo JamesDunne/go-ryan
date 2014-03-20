@@ -39,8 +39,16 @@ func (s ByDate) Less(i, j int) bool {
 	}
 
 	if s.dir == sortAscending {
-		return s.Entries[i].ModTime().Before(s.Entries[j].ModTime())
+		if s.Entries[i].ModTime().Equal(s.Entries[j].ModTime()) {
+			return s.Entries[i].Name() > s.Entries[j].Name()
+		} else {
+			return s.Entries[i].ModTime().Before(s.Entries[j].ModTime())
+		}
 	} else {
-		return s.Entries[i].ModTime().After(s.Entries[j].ModTime())
+		if s.Entries[i].ModTime().Equal(s.Entries[j].ModTime()) {
+			return s.Entries[i].Name() > s.Entries[j].Name()
+		} else {
+			return s.Entries[i].ModTime().After(s.Entries[j].ModTime())
+		}
 	}
 }
