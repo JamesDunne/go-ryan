@@ -3,16 +3,14 @@ package main
 import (
 	"flag"
 	"fmt"
-	//"html"
 	"html/template"
-	"io"
 	//"image"
-	//"image/jpeg"
+	"image/jpeg"
+	"io"
 	"log"
 	"mime"
 	"net"
 	"net/http"
-	//"net/url"
 	"os"
 	"os/signal"
 	"path"
@@ -22,14 +20,18 @@ import (
 )
 
 import (
-//"github.com/JamesDunne/go-ryan/resize"
+	"github.com/JamesDunne/go-ryan/resize"
 )
 
-var proxyRoot, siteHost, picsDir string
+// Web host info:
+var proxyRoot, siteHost string
+
+// Parsed HTML templates:
 var templates *template.Template
 
 // Configured URLs based on commandline arguments:
 var rootURL, picsURL, thumbsURL, deleteURL, uploadURL, listURL string
+var picsDir, thumbsDir string
 
 // Reads the /pics/ directory:
 func getPics() []os.FileInfo {
@@ -52,6 +54,10 @@ func getPics() []os.FileInfo {
 	sort.Sort(ByDate{fis, sortDescending})
 
 	return fis
+}
+
+func getMimeType(filename string) string {
+	return mime.TypeByExtension(strings.ToLower(path.Ext(filename)))
 }
 
 type FileViewModel struct {
@@ -109,7 +115,7 @@ func indexHandler(rsp http.ResponseWriter, req *http.Request) {
 		model.Files = append(model.Files, FileViewModel{
 			Name:     fi.Name(),
 			Size:     fi.Size(),
-			Mime:     mime.TypeByExtension(strings.ToLower(path.Ext(fi.Name()))),
+			Mime:     getMimeType(fi.Name()),
 			LastMod:  fi.ModTime().String(),
 			PicURL:   pjoin(picsURL, fi.Name()),
 			ThumbURL: pjoin(thumbsURL, fi.Name()),
@@ -145,7 +151,7 @@ func uploadHandler(rsp http.ResponseWriter, req *http.Request) {
 
 			// Copy upload data to a local file:
 			destPath := path.Join(picsDir, part.FileName())
-			log.Printf("Upload: '%s' to '%s'\n", part.FileName(), destPath)
+			log.Printf("Accepting uploading: '%s'\n", destPath)
 
 			f, err := os.Create(destPath)
 			if err != nil {
@@ -161,11 +167,15 @@ func uploadHandler(rsp http.ResponseWriter, req *http.Request) {
 
 	// Handle the panic:
 	if pnk != nil {
+		var msg string
 		if err, ok := pnk.(error); ok {
-			http.Error(rsp, err.Error(), http.StatusInternalServerError)
+			msg = err.Error()
 		} else {
-			http.Error(rsp, fmt.Sprint("%v", pnk), http.StatusInternalServerError)
+			msg = fmt.Sprint("%v", pnk)
 		}
+
+		log.Printf("ERROR: %s", msg)
+		http.Error(rsp, "500 Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
@@ -224,8 +234,74 @@ func deleteJsonHandler(req *http.Request) (result interface{}) {
 
 // File server for `/thumbs/*`:
 func thumbHandler(rsp http.ResponseWriter, req *http.Request) {
-	// TODO!
-	//req.URL
+	filename := removePrefix(req.URL.Path, thumbsURL)
+
+	mimeType := getMimeType(filename)
+	if mimeType != "image/jpeg" {
+		http.Error(rsp, "400 Bad Request - mime type of thumbnail requested is not image/jpeg", http.StatusBadRequest)
+		return
+	}
+
+	// Locate the pic and the thumbnail:
+	picPath := path.Join(picsDir, filename)
+	thumbPath := path.Join(thumbsDir, filename)
+
+	// Check if the pic file exists:
+	picFI, err := os.Stat(picPath)
+	if err != nil {
+		http.Error(rsp, "404 Not Found - could not find original image to make thumbnail of", http.StatusNotFound)
+		return
+	}
+
+	// Check if the thumbnail file exists:
+	thumbFI, err := os.Stat(thumbPath)
+	if err == nil {
+		// If the modtime on the thumbnail is after the pic, serve the thumbnail file:
+		if thumbFI.ModTime().After(picFI.ModTime()) {
+			http.ServeFile(rsp, req, thumbPath)
+			return
+		}
+	}
+
+	// Create a new thumbnail:
+	{
+
+		// Open the original image:
+		pf, err := os.Open(picPath)
+		defer pf.Close()
+		if err != nil {
+			http.Error(rsp, "404 Not Found - could not open original image to make thumbnail of", http.StatusNotFound)
+			return
+		}
+		// Decode the JPEG:
+		img, err := jpeg.Decode(pf)
+		if err != nil {
+			http.Error(rsp, "400 Bad Request - image is not a proper JPEG", http.StatusBadRequest)
+			return
+		}
+
+		// Create the thumbnail file:
+		tf, err := os.Create(thumbPath)
+		defer tf.Close()
+		if err != nil {
+			http.Error(rsp, "500 Internal Server Error - could not create thumbnail file", http.StatusNotFound)
+			return
+		}
+
+		//size := img.Bounds().Size()
+		//if size.X
+
+		thumbImg := resize.Resize(img, img.Bounds(), 64, 64)
+		err = jpeg.Encode(tf, thumbImg, &jpeg.Options{Quality: 90})
+		if err != nil {
+			http.Error(rsp, "500 Internal Server Error - error while encoding JPEG", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Serve the thumbnail:
+	http.ServeFile(rsp, req, thumbPath)
+	return
 }
 
 func main() {
@@ -241,6 +317,7 @@ func main() {
 	flag.StringVar(&proxyRoot, "p", "/", "root of web requests to process")
 	flag.StringVar(&templatesDir, "tmpl", "./tmpl", "local filesystem path to HTML templates")
 	flag.StringVar(&picsDir, "pics", "./pics", "local filesystem path to store pictures")
+	flag.StringVar(&thumbsDir, "thumbs", "./thumbs", "local filesystem path to cache thumbnails")
 	flag.Parse()
 
 	// Clean up args:
@@ -248,6 +325,15 @@ func main() {
 	proxyRoot = removeSuffix(proxyRoot, "/")
 	templatesDir = removeSuffix(templatesDir, "/")
 	picsDir = removeSuffix(picsDir, "/")
+	thumbsDir = removeSuffix(thumbsDir, "/")
+
+	// Create directories if they don't exist:
+	if _, err := os.Stat(picsDir); err != nil {
+		os.Mkdir(picsDir, 0775)
+	}
+	if _, err := os.Stat(thumbsDir); err != nil {
+		os.Mkdir(thumbsDir, 0775)
+	}
 
 	// Parse HTML templates:
 	templates = template.Must(template.ParseGlob(path.Join(templatesDir, "*.html")))

@@ -24,9 +24,9 @@ th,td   { white-space: nowrap; }
                 <tr>
                     <th>Image</th>
                     <th>Name</th>
+                    <th>Last Modified</th>
                     <th>Size</th>
                     <th>Type</th>
-                    <th>Last Modified</th>
                     <th>Action</th>
                 </tr>
             </thead>
@@ -35,9 +35,9 @@ th,td   { white-space: nowrap; }
                 <tr data-filename="{{.Name}}">
                     <td>{{if eq .Mime "image/jpeg"}}<img src="{{.ThumbURL}}" alt="{{.Name}}" />{{end}}</td>
                     <td><a href="{{.PicURL}}" target="_blank">{{.Name}}</a></td>
+                    <td>{{.LastMod}}</td>
                     <td style="text-align: right">{{.Size}}</td>
                     <td>{{.Mime}}</td>
-                    <td>{{.LastMod}}</td>
                     <td><a class="delete_link" href="#">Delete</a></td>
                 </tr>
 {{end}}
