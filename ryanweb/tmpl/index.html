@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+
+<html>
+<head>
+    <script type="text/javascript" src="//code.jquery.com/jquery-1.11.0.min.js"></script>
+    <style>
+body    { font: tahoma; }
+th      { text-align: left; }
+th,td   { white-space: nowrap; }
+    </style>
+</head>
+<body>
+    <div>
+        Click here to upload pictures/video:
+        <form action="/ryan/upload" method="post" enctype="multipart/form-data">
+            <input type="file" name="files" multiple="multiple" />
+            <input type="submit" value="Upload" />
+        </form>
+    </div>
+    <div>
+        <h3>Uploaded files:</h3>
+        <table border="0" cellspacing="2">
+            <thead>
+                <tr>
+                    <th></th>
+                    <th>Image</th>
+                    <th>Size</th>
+                    <th>Type</th>
+                    <th>Last Modified</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+{{range .}}
+                <tr data-filename="{{.Name}}">
+                    <td><img src="/ryan/thumbs/{{.Name}}" alt="{{.Name}}" /></td>
+                    <td>{{.Name}}</td>
+                    <td style="text-align: right">size</td>
+                    <td>mime</td>
+                    <td>lastmod date</td>
+                    <td><a class="delete_link" href="#">Delete</a></td>
+                </tr>
+{{end}}
+            </tbody>
+        </table>
+    </div>
+    <script><!--
+$(function() {
+    $('a.delete_link').click(function(e) {
+        e.preventDefault();
+        try {
+            var link = $(this);
+            var tr = link.parents("tr");
+            var filename = tr.attr('data-filename');
+            if (!confirm('Confirm deletion of \'' + filename + '\''))
+                return false;
+
+            $.ajax({
+                type: 'POST',
+                url: link.attr('href'),
+                data: { filename: filename },
+                success: function(data) {
+                    tr.parent().removeChild(tr);
+                }
+            });
+        } finally {
+            return false;
+        }
+    });
+});
+//-->
+    </script>
+</body>
+</html>

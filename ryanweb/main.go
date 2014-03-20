@@ -2,11 +2,13 @@ package main
 
 import (
 	//"bufio"
-	"encoding/json"
 	"flag"
 	"fmt"
 	//"html"
 	"html/template"
+	"io"
+	//"image"
+	//"image/jpeg"
 	"log"
 	//"mime"
 	"net"
@@ -20,8 +22,24 @@ import (
 	"syscall"
 )
 
+import (
+//"github.com/JamesDunne/go-ryan/resize"
+)
+
 var proxyRoot, picsDir string
 var templates *template.Template
+
+func pjoin(a, b string) string {
+	if strings.HasSuffix(a, "/") && strings.HasPrefix(b, "/") {
+		return a + b[1:]
+	} else if strings.HasSuffix(a, "/") {
+		return a + b
+	} else if strings.HasPrefix(b, "/") {
+		return a + b
+	} else {
+		return a + "/" + b
+	}
+}
 
 func removeIfStartsWith(s, start string) string {
 	if !strings.HasPrefix(s, start) {
@@ -124,21 +142,9 @@ func doRedirect(req *http.Request, rsp http.ResponseWriter, url string, code int
 	http.Redirect(rsp, req, url, code)
 }
 
-func doOK(req *http.Request, msg string, code int) {
-}
-
-// Marshal an object to JSON or panic.
-func marshal(v interface{}) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(err)
-	}
-	return string(b)
-}
-
-func readDirectory(dir string) []os.FileInfo {
+func getPics() []os.FileInfo {
 	// Open the directory to read its contents:
-	f, err := os.Open(dir)
+	f, err := os.Open(picsDir)
 	if err != nil {
 		panic(err)
 	}
@@ -150,13 +156,21 @@ func readDirectory(dir string) []os.FileInfo {
 		panic(err)
 	}
 
+	// Remove the opened files from the list (presume they are in mid-upload via SFTP):
+
 	// Sort the entries by the desired mode:
 	sort.Sort(ByDate{fis, sortDescending})
 
 	return fis
 }
 
+// HTML handler for `/`:
 func indexHandler(rsp http.ResponseWriter, req *http.Request) {
+	if req.URL.Path != proxyRoot+"/" {
+		http.Error(rsp, "404 Not Found", http.StatusNotFound)
+		return
+	}
+
 	var rsperr error
 
 	defer func() {
@@ -174,7 +188,8 @@ func indexHandler(rsp http.ResponseWriter, req *http.Request) {
 		}
 	}()
 
-	fis := readDirectory(picsDir)
+	// Read the directory:
+	fis := getPics()
 
 	defer func() {
 		if rsperr != nil {
@@ -188,6 +203,59 @@ func indexHandler(rsp http.ResponseWriter, req *http.Request) {
 	}()
 }
 
+// HTML handler for `/upload`:
+func uploadHandler(rsp http.ResponseWriter, req *http.Request) {
+	if req.Method != "POST" {
+		http.Error(rsp, "Method requires POST", http.StatusMethodNotAllowed)
+		return
+	}
+
+	pnk := try(func() {
+		reader, err := req.MultipartReader()
+		if err != nil {
+			panic(err)
+		}
+
+		// Keep reading the multipart form data and handle file uploads:
+		for {
+			part, err := reader.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if part.FileName() == "" {
+				continue
+			}
+
+			// Copy upload data to a local file:
+			destPath := path.Join(picsDir, part.FileName())
+			log.Printf("Upload: '%s' to '%s'\n", part.FileName(), destPath)
+
+			f, err := os.Create(destPath)
+			if err != nil {
+				panic(fmt.Errorf("Could not create local file '%s'; error: %s", destPath, err.Error()))
+			}
+			defer f.Close()
+
+			if _, err := io.Copy(f, part); err != nil {
+				panic(err)
+			}
+		}
+	})
+
+	// Handle the panic:
+	if pnk != nil {
+		if err, ok := pnk.(error); ok {
+			http.Error(rsp, err.Error(), http.StatusInternalServerError)
+		} else {
+			http.Error(rsp, fmt.Sprint("%v", pnk), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// 302 to `/`:
+	http.Redirect(rsp, req, proxyRoot+"/", http.StatusFound)
+}
+
 func extractNames(fis []os.FileInfo) []string {
 	names := make([]string, len(fis), len(fis))
 	for i := range fis {
@@ -196,51 +264,36 @@ func extractNames(fis []os.FileInfo) []string {
 	return names
 }
 
-func listHandler(rsp http.ResponseWriter, req *http.Request) {
-	var rsperr error
+// JSON handler for `/list.php`:
+func listJsonHandler(req *http.Request) (result interface{}) {
+	fis := getPics()
 
-	defer func() {
-		if err := recover(); err != nil {
-			var ok bool
-			if rsperr, ok = err.(error); !ok {
-				// Format the panic as a string if it's not an `error`:
-				rsperr = fmt.Errorf("%v", err)
-			}
-		}
-
-		if rsperr != nil {
-			// Error response:
-			rsp.Header().Add("Content-Type", "application/json; charset=utf-8")
-			doError(req, rsp, rsperr.Error(), http.StatusInternalServerError)
-			return
-		}
-	}()
-
-	fis := readDirectory(picsDir)
-
-	defer func() {
-		if rsperr != nil {
-			return
-		}
-
-		// Successful response:
-		rsp.Header().Add("Content-Type", "application/json; charset=utf-8")
-		rsp.WriteHeader(http.StatusOK)
-
-		result := struct {
-			BaseUrl string   `json:"baseUrl"`
-			Files   []string `json:"files"`
-		}{
-			BaseUrl: "http://bittwiddlers.org/ryan/pics/",
-			Files:   extractNames(fis),
-		}
-		bytes, _ := json.Marshal(result)
-		rsp.Write(bytes)
-	}()
+	return struct {
+		BaseUrl string   `json:"baseUrl"`
+		Files   []string `json:"files"`
+	}{
+		BaseUrl: "http://bittwiddlers.org/ryan/pics/",
+		Files:   extractNames(fis),
+	}
 }
 
+// JSON handler for `/delete`:
+func deleteJsonHandler(req *http.Request) (result interface{}) {
+	if req.Method != "POST" {
+		panic(fmt.Errorf("Method requires POST"))
+	}
+
+	return struct {
+		Success bool `json:"success"`
+	}{
+		Success: true,
+	}
+}
+
+// File server for `/thumbs/*`:
 func thumbHandler(rsp http.ResponseWriter, req *http.Request) {
 
+	//req.URL
 }
 
 func main() {
@@ -251,10 +304,15 @@ func main() {
 	// TODO(jsd): Make this pair of arguments a little more elegant, like "unix:/path/to/socket" or "tcp://:8080"
 	flag.StringVar(&socketType, "l", "tcp", `type of socket to listen on; "unix" or "tcp" (default)`)
 	flag.StringVar(&socketAddr, "a", ":8080", `address to listen on; ":8080" (default TCP port) or "/path/to/unix/socket"`)
+
 	flag.StringVar(&proxyRoot, "p", "/ryan", "root of web requests to process")
 	flag.StringVar(&templatesDir, "tmpl", "./tmpl", "local filesystem path to HTML templates")
 	flag.StringVar(&picsDir, "pics", "./pics", "local filesystem path to store pictures")
 	flag.Parse()
+
+	if strings.HasSuffix(proxyRoot, "/") {
+		proxyRoot = proxyRoot[0 : len(proxyRoot)-1]
+	}
 
 	// Parse HTML templates:
 	templates = template.Must(template.ParseGlob(path.Join(templatesDir, "*.html")))
@@ -287,10 +345,17 @@ func main() {
 
 	// Set up the request multiplexer:
 	mux := http.NewServeMux()
-	mux.HandleFunc("/index.php", indexHandler)
-	mux.HandleFunc("/list.php", listHandler)
-	mux.Handle("/pics/", http.StripPrefix("/pics/", http.FileServer(http.Dir(picsDir))))
-	mux.HandleFunc("/thumbs/", thumbHandler)
+	mux.HandleFunc(pjoin(proxyRoot, "/"), indexHandler)
+	mux.HandleFunc(pjoin(proxyRoot, "/upload"), uploadHandler)
+
+	mux.Handle(pjoin(proxyRoot, "/list"), NewJsonHandler(listJsonHandler))
+	mux.Handle(pjoin(proxyRoot, "/list.php"), NewJsonHandler(listJsonHandler))
+	mux.Handle(pjoin(proxyRoot, "/delete"), NewJsonHandler(deleteJsonHandler))
+
+	// Serve /pics/ from the folder:
+	mux.Handle(pjoin(proxyRoot, "/pics/"), http.StripPrefix(pjoin(proxyRoot, "/pics/"), http.FileServer(http.Dir(picsDir))))
+	// Serve /thumbs/ requests dynamically with a filesystem-backed cache:
+	mux.HandleFunc(pjoin(proxyRoot, "/thumbs/"), thumbHandler)
 
 	// Start the HTTP server on the listening socket:
 	log.Fatal(http.Serve(l, http.Handler(mux)))
