@@ -1,7 +1,6 @@
 package main
 
 import (
-	//"bufio"
 	"flag"
 	"fmt"
 	//"html"
@@ -10,7 +9,7 @@ import (
 	//"image"
 	//"image/jpeg"
 	"log"
-	//"mime"
+	"mime"
 	"net"
 	"net/http"
 	//"net/url"
@@ -29,6 +28,7 @@ import (
 var proxyRoot, picsDir string
 var templates *template.Template
 
+// Join paths components, preserving leading and trailing '/' chars:
 func pjoin(a, b string) string {
 	if strings.HasSuffix(a, "/") && strings.HasPrefix(b, "/") {
 		return a + b[1:]
@@ -48,100 +48,8 @@ func removeIfStartsWith(s, start string) string {
 	return s[len(start):]
 }
 
-// For directory entry sorting:
-
-type Entries []os.FileInfo
-
-func (s Entries) Len() int      { return len(s) }
-func (s Entries) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
-
-type sortBy int
-
-const (
-	sortByName sortBy = iota
-	sortByDate
-	sortBySize
-)
-
-type sortDirection int
-
-const (
-	sortAscending sortDirection = iota
-	sortDescending
-)
-
-// Sort by name:
-type ByName struct {
-	Entries
-	dir sortDirection
-}
-
-func (s ByName) Less(i, j int) bool {
-	if s.Entries[i].IsDir() && !s.Entries[j].IsDir() {
-		return true
-	}
-	if !s.Entries[i].IsDir() && s.Entries[j].IsDir() {
-		return false
-	}
-
-	if s.dir == sortAscending {
-		return s.Entries[i].Name() < s.Entries[j].Name()
-	} else {
-		return s.Entries[i].Name() > s.Entries[j].Name()
-	}
-}
-
-// Sort by last modified time:
-type ByDate struct {
-	Entries
-	dir sortDirection
-}
-
-func (s ByDate) Less(i, j int) bool {
-	if s.Entries[i].IsDir() && !s.Entries[j].IsDir() {
-		return true
-	}
-	if !s.Entries[i].IsDir() && s.Entries[j].IsDir() {
-		return false
-	}
-
-	if s.dir == sortAscending {
-		return s.Entries[i].ModTime().Before(s.Entries[j].ModTime())
-	} else {
-		return s.Entries[i].ModTime().After(s.Entries[j].ModTime())
-	}
-}
-
-// Sort by size:
-type BySize struct {
-	Entries
-	dir sortDirection
-}
-
-func (s BySize) Less(i, j int) bool {
-	if s.Entries[i].IsDir() && !s.Entries[j].IsDir() {
-		return true
-	}
-	if !s.Entries[i].IsDir() && s.Entries[j].IsDir() {
-		return false
-	}
-
-	if s.dir == sortAscending {
-		return s.Entries[i].Size() < s.Entries[j].Size()
-	} else {
-		return s.Entries[i].Size() > s.Entries[j].Size()
-	}
-}
-
 // Logging+action functions
-func doError(req *http.Request, rsp http.ResponseWriter, msg string, code int) {
-	http.Error(rsp, msg, code)
-}
-
-func doRedirect(req *http.Request, rsp http.ResponseWriter, url string, code int) {
-	http.Redirect(rsp, req, url, code)
-}
-
+// Reads the /pics/ directory:
 func getPics() []os.FileInfo {
 	// Open the directory to read its contents:
 	f, err := os.Open(picsDir)
@@ -171,36 +79,45 @@ func indexHandler(rsp http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	var fis []os.FileInfo
+	pnk := try(func() {
+		// Read the directory:
+		fis = getPics()
+	})
+
 	var rsperr error
-
-	defer func() {
-		if err := recover(); err != nil {
-			var ok bool
-			if rsperr, ok = err.(error); !ok {
-				// Format the panic as a string if it's not an `error`:
-				rsperr = fmt.Errorf("%v", err)
-			}
+	if pnk != nil {
+		var ok bool
+		if rsperr, ok = pnk.(error); !ok {
+			// Format the panic as a string if it's not an `error`:
+			rsperr = fmt.Errorf("%v", pnk)
 		}
+		msg := rsperr.Error()
+		log.Printf("ERROR: %s\n", msg)
+		http.Error(rsp, msg, http.StatusInternalServerError)
+		return
+	}
 
-		if rsperr != nil {
-			doError(req, rsp, rsperr.Error(), http.StatusInternalServerError)
-			return
-		}
-	}()
+	// Successful response:
+	rsp.Header().Add("Content-Type", "text/html; charset=utf-8")
+	rsp.WriteHeader(http.StatusOK)
 
-	// Read the directory:
-	fis := getPics()
+	// Convert the os.FileInfos to a more HTML-friendly model:
+	model := make([]struct {
+		Name    string
+		Size    int64
+		Mime    string
+		LastMod string
+	}, len(fis))
+	for i, fi := range fis {
+		model[i].Name = fi.Name()
+		model[i].Size = fi.Size()
+		model[i].Mime = mime.TypeByExtension(path.Ext(fi.Name()))
+		model[i].LastMod = fi.ModTime().String()
+	}
 
-	defer func() {
-		if rsperr != nil {
-			return
-		}
-
-		// Successful response:
-		rsp.Header().Add("Content-Type", "text/html; charset=utf-8")
-		rsp.WriteHeader(http.StatusOK)
-		templates.ExecuteTemplate(rsp, "index.html", fis)
-	}()
+	// Execute the HTML template:
+	templates.ExecuteTemplate(rsp, "index.html", model)
 }
 
 // HTML handler for `/upload`:
