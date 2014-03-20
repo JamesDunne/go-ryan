@@ -25,30 +25,12 @@ import (
 //"github.com/JamesDunne/go-ryan/resize"
 )
 
-var proxyRoot, picsDir string
+var proxyRoot, siteHost, picsDir string
 var templates *template.Template
 
-// Join paths components, preserving leading and trailing '/' chars:
-func pjoin(a, b string) string {
-	if strings.HasSuffix(a, "/") && strings.HasPrefix(b, "/") {
-		return a + b[1:]
-	} else if strings.HasSuffix(a, "/") {
-		return a + b
-	} else if strings.HasPrefix(b, "/") {
-		return a + b
-	} else {
-		return a + "/" + b
-	}
-}
+// Configured URLs based on commandline arguments:
+var rootURL, picsURL, thumbsURL, deleteURL, uploadURL, listURL string
 
-func removeIfStartsWith(s, start string) string {
-	if !strings.HasPrefix(s, start) {
-		return s
-	}
-	return s[len(start):]
-}
-
-// Logging+action functions
 // Reads the /pics/ directory:
 func getPics() []os.FileInfo {
 	// Open the directory to read its contents:
@@ -72,9 +54,24 @@ func getPics() []os.FileInfo {
 	return fis
 }
 
+type FileViewModel struct {
+	Name     string
+	Size     int64
+	Mime     string
+	LastMod  string
+	PicURL   string
+	ThumbURL string
+}
+
+type IndexViewModel struct {
+	DeleteURL string
+	UploadURL string
+	Files     []FileViewModel
+}
+
 // HTML handler for `/`:
 func indexHandler(rsp http.ResponseWriter, req *http.Request) {
-	if req.URL.Path != proxyRoot+"/" {
+	if req.URL.Path != rootURL {
 		http.Error(rsp, "404 Not Found", http.StatusNotFound)
 		return
 	}
@@ -103,21 +100,20 @@ func indexHandler(rsp http.ResponseWriter, req *http.Request) {
 	rsp.WriteHeader(http.StatusOK)
 
 	// Convert the os.FileInfos to a more HTML-friendly model:
-	model := make([]struct {
-		Name    string
-		Size    int64
-		Mime    string
-		LastMod string
-		Href    string
-		Thumb   string
-	}, len(fis))
-	for i, fi := range fis {
-		model[i].Name = fi.Name()
-		model[i].Size = fi.Size()
-		model[i].Mime = mime.TypeByExtension(path.Ext(fi.Name()))
-		model[i].LastMod = fi.ModTime().String()
-		model[i].Href = proxyRoot + "/pics/" + fi.Name()
-		model[i].Thumb = proxyRoot + "/thumbs/" + fi.Name()
+	model := IndexViewModel{
+		DeleteURL: deleteURL,
+		UploadURL: uploadURL,
+		Files:     make([]FileViewModel, 0, len(fis)),
+	}
+	for _, fi := range fis {
+		model.Files = append(model.Files, FileViewModel{
+			Name:     fi.Name(),
+			Size:     fi.Size(),
+			Mime:     mime.TypeByExtension(strings.ToLower(path.Ext(fi.Name()))),
+			LastMod:  fi.ModTime().String(),
+			PicURL:   pjoin(picsURL, fi.Name()),
+			ThumbURL: pjoin(thumbsURL, fi.Name()),
+		})
 	}
 
 	// Execute the HTML template:
@@ -174,7 +170,7 @@ func uploadHandler(rsp http.ResponseWriter, req *http.Request) {
 	}
 
 	// 302 to `/`:
-	http.Redirect(rsp, req, proxyRoot+"/", http.StatusFound)
+	http.Redirect(rsp, req, rootURL, http.StatusFound)
 }
 
 func extractNames(fis []os.FileInfo) []string {
@@ -193,7 +189,7 @@ func listJsonHandler(req *http.Request) (result interface{}) {
 		BaseUrl string   `json:"baseUrl"`
 		Files   []string `json:"files"`
 	}{
-		BaseUrl: "http://bittwiddlers.org/ryan/pics/",
+		BaseUrl: pjoin(siteHost, picsURL),
 		Files:   extractNames(fis),
 	}
 }
@@ -241,14 +237,17 @@ func main() {
 	flag.StringVar(&socketType, "l", "tcp", `type of socket to listen on; "unix" or "tcp" (default)`)
 	flag.StringVar(&socketAddr, "a", ":8080", `address to listen on; ":8080" (default TCP port) or "/path/to/unix/socket"`)
 
-	flag.StringVar(&proxyRoot, "p", "/ryan", "root of web requests to process")
+	flag.StringVar(&siteHost, "host", "http://ryan.bittwiddlers.org", "site host (scheme://host:port)")
+	flag.StringVar(&proxyRoot, "p", "/", "root of web requests to process")
 	flag.StringVar(&templatesDir, "tmpl", "./tmpl", "local filesystem path to HTML templates")
 	flag.StringVar(&picsDir, "pics", "./pics", "local filesystem path to store pictures")
 	flag.Parse()
 
-	if strings.HasSuffix(proxyRoot, "/") {
-		proxyRoot = proxyRoot[0 : len(proxyRoot)-1]
-	}
+	// Clean up args:
+	siteHost = removeSuffix(siteHost, "/")
+	proxyRoot = removeSuffix(proxyRoot, "/")
+	templatesDir = removeSuffix(templatesDir, "/")
+	picsDir = removeSuffix(picsDir, "/")
 
 	// Parse HTML templates:
 	templates = template.Must(template.ParseGlob(path.Join(templatesDir, "*.html")))
@@ -281,17 +280,28 @@ func main() {
 
 	// Set up the request multiplexer:
 	mux := http.NewServeMux()
-	mux.HandleFunc(pjoin(proxyRoot, "/"), indexHandler)
-	mux.HandleFunc(pjoin(proxyRoot, "/upload"), uploadHandler)
+	rootURL = pjoin(proxyRoot, "/")
+	mux.HandleFunc(rootURL, indexHandler)
 
-	mux.Handle(pjoin(proxyRoot, "/list"), NewJsonHandler(listJsonHandler))
-	mux.Handle(pjoin(proxyRoot, "/list.php"), NewJsonHandler(listJsonHandler))
-	mux.Handle(pjoin(proxyRoot, "/delete"), NewJsonHandler(deleteJsonHandler))
+	// Upload handler:
+	uploadURL = pjoin(proxyRoot, "/upload")
+	mux.HandleFunc(uploadURL, uploadHandler)
+
+	// JSON list handler:
+	listURL = pjoin(proxyRoot, "/list")
+	mux.Handle(listURL, NewJsonHandler(listJsonHandler))
+
+	// Delete handler:
+	deleteURL = pjoin(proxyRoot, "/delete")
+	mux.Handle(deleteURL, NewJsonHandler(deleteJsonHandler))
 
 	// Serve /pics/ from the folder:
-	mux.Handle(pjoin(proxyRoot, "/pics/"), http.StripPrefix(pjoin(proxyRoot, "/pics/"), http.FileServer(http.Dir(picsDir))))
+	picsURL = pjoin(proxyRoot, "/pics/")
+	mux.Handle(picsURL, http.StripPrefix(picsURL, http.FileServer(http.Dir(picsDir))))
+
 	// Serve /thumbs/ requests dynamically with a filesystem-backed cache:
-	mux.HandleFunc(pjoin(proxyRoot, "/thumbs/"), thumbHandler)
+	thumbsURL = pjoin(proxyRoot, "/thumbs/")
+	mux.HandleFunc(thumbsURL, thumbHandler)
 
 	// Start the HTTP server on the listening socket:
 	log.Fatal(http.Serve(l, http.Handler(mux)))

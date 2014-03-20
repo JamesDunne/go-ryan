@@ -12,7 +12,7 @@ th,td   { white-space: nowrap; }
 <body>
     <div>
         Click here to upload pictures/video:
-        <form action="/ryan/upload" method="post" enctype="multipart/form-data">
+        <form action="{{.UploadURL}}" method="post" enctype="multipart/form-data">
             <input type="file" name="files" multiple="multiple" />
             <input type="submit" value="Upload" />
         </form>
@@ -31,10 +31,10 @@ th,td   { white-space: nowrap; }
                 </tr>
             </thead>
             <tbody>
-{{range .}}
+{{range .Files}}
                 <tr data-filename="{{.Name}}">
-                    <td>{{if eq .Mime "image/jpeg"}}<img src="{{.Thumb}}" alt="{{.Name}}" />{{end}}</td>
-                    <td><a href="{{.Href}}" target="_blank">{{.Name}}</a></td>
+                    <td>{{if eq .Mime "image/jpeg"}}<img src="{{.ThumbURL}}" alt="{{.Name}}" />{{end}}</td>
+                    <td><a href="{{.PicURL}}" target="_blank">{{.Name}}</a></td>
                     <td style="text-align: right">{{.Size}}</td>
                     <td>{{.Mime}}</td>
                     <td>{{.LastMod}}</td>
@@ -57,7 +57,7 @@ $(function() {
 
             $.ajax({
                 type: 'POST',
-                url: '/ryan/delete',
+                url: '{{.DeleteURL}}',
                 data: { "filename": filename },
                 success: function(result) {
                     if (!result.success) {
