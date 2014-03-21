@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -32,6 +33,18 @@ var templates *template.Template
 // Configured URLs based on commandline arguments:
 var rootURL, picsURL, thumbsURL, deleteURL, uploadURL, listURL string
 var picsDir, thumbsDir string
+
+func canonicalPath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		panic(err)
+	}
+	abs, err = filepath.EvalSymlinks(abs)
+	if err != nil {
+		panic(err)
+	}
+	return abs
+}
 
 // Reads the /pics/ directory:
 func getPics() []os.FileInfo {
@@ -283,9 +296,19 @@ func main() {
 	// Clean up args:
 	siteHost = removeSuffix(siteHost, "/")
 	proxyRoot = removeSuffix(proxyRoot, "/")
+
 	templatesDir = removeSuffix(templatesDir, "/")
 	picsDir = removeSuffix(picsDir, "/")
 	thumbsDir = removeSuffix(thumbsDir, "/")
+
+	// Canonicalize local paths (follow symlinks):
+	templatesDir = canonicalPath(templatesDir)
+	picsDir = canonicalPath(picsDir)
+	thumbsDir = canonicalPath(thumbsDir)
+
+	log.Printf("templates: %s\n", templatesDir)
+	log.Printf("pics:      %s\n", picsDir)
+	log.Printf("thumbs:    %s\n", thumbsDir)
 
 	// Create directories if they don't exist:
 	if _, err := os.Stat(picsDir); err != nil {
