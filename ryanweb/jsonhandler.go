@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 )
@@ -18,35 +17,31 @@ func NewJsonHandler(handler JsonHandlerFunc) JsonHandler {
 }
 
 func (h JsonHandler) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
-	var rsperr error = nil
 	var result interface{}
+
+	// We're guaranteed that we want to return a JSON result:
+	rsp.Header().Add("Content-Type", "application/json; charset=utf-8")
 
 	// Try to run the handler logic and catch any panics:
 	pnk := try(func() {
 		result = h.handler(req)
 	})
-	// Handle the panic and convert it into an `error`:
+
+	// Handle the panic:
 	if pnk != nil {
-		var ok bool
-		if rsperr, ok = pnk.(error); !ok {
-			// Format the panic as a string if it's not an `error`:
-			rsperr = fmt.Errorf("%v", pnk)
-		}
-	}
+		statusCode, userMessage, logError := getErrorDetails(pnk)
 
-	// We're guaranteed that we want to return a JSON result:
-	rsp.Header().Add("Content-Type", "application/json; charset=utf-8")
+		// Log the private error details:
+		log.Printf("ERROR: %s\n", logError)
 
-	// Report the application error:
-	if rsperr != nil {
 		// Error response:
-		rsp.WriteHeader(http.StatusInternalServerError)
+		rsp.WriteHeader(statusCode)
 		bytes, _ := json.Marshal(struct {
 			Success bool   `json:"success"`
 			Message string `json:"message"`
 		}{
 			Success: false,
-			Message: rsperr.Error(),
+			Message: userMessage,
 		})
 		rsp.Write(bytes)
 		return
@@ -63,7 +58,7 @@ func (h JsonHandler) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 
 	bytes, err := json.Marshal(result)
 	if err != nil {
-		log.Println(err.Error())
+		log.Printf("There was an error attempting to marshal the response object to JSON; %s\n", err.Error())
 
 		// Canned response:
 		rsp.WriteHeader(http.StatusInternalServerError)

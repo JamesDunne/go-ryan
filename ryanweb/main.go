@@ -83,23 +83,8 @@ func indexHandler(rsp http.ResponseWriter, req *http.Request) {
 	}
 
 	var fis []os.FileInfo
-	pnk := try(func() {
-		// Read the directory:
-		fis = getPics()
-	})
-
-	var rsperr error
-	if pnk != nil {
-		var ok bool
-		if rsperr, ok = pnk.(error); !ok {
-			// Format the panic as a string if it's not an `error`:
-			rsperr = fmt.Errorf("%v", pnk)
-		}
-		msg := rsperr.Error()
-		log.Printf("ERROR: %s\n", msg)
-		http.Error(rsp, msg, http.StatusInternalServerError)
-		return
-	}
+	// Read the directory:
+	fis = getPics()
 
 	// Successful response:
 	rsp.Header().Add("Content-Type", "text/html; charset=utf-8")
@@ -134,7 +119,7 @@ func uploadHandler(rsp http.ResponseWriter, req *http.Request) {
 
 	reader, err := req.MultipartReader()
 	if err != nil {
-		panic(err)
+		panic(NewHttpError(http.StatusBadRequest, "Error parsing multipart form data", err))
 	}
 
 	// Keep reading the multipart form data and handle file uploads:
@@ -149,16 +134,16 @@ func uploadHandler(rsp http.ResponseWriter, req *http.Request) {
 
 		// Copy upload data to a local file:
 		destPath := path.Join(picsDir, part.FileName())
-		log.Printf("Accepting uploading: '%s'\n", destPath)
+		log.Printf("Accepting upload: '%s'\n", destPath)
 
 		f, err := os.Create(destPath)
 		if err != nil {
-			panic(fmt.Errorf("Could not create local file '%s'; error: %s", destPath, err.Error()))
+			panic(NewHttpError(http.StatusInternalServerError, "Could not accept upload", fmt.Errorf("Could not create local file '%s'; %s", destPath, err.Error())))
 		}
 		defer f.Close()
 
 		if _, err := io.Copy(f, part); err != nil {
-			panic(err)
+			panic(NewHttpError(http.StatusInternalServerError, "Could not write upload data to local file", fmt.Errorf("Could not write to local file '%s'; %s", destPath, err)))
 		}
 	}
 
@@ -190,22 +175,22 @@ func listJsonHandler(req *http.Request) (result interface{}) {
 // JSON handler for `/delete`:
 func deleteJsonHandler(req *http.Request) (result interface{}) {
 	if req.Method != "POST" {
-		panic(fmt.Errorf("Method requires POST"))
+		panic(NewHttpError(http.StatusMethodNotAllowed, "Upload requires POST method", fmt.Errorf("Upload requires POST method")))
 	}
 
 	// Parse form data:
 	if err := req.ParseForm(); err != nil {
-		panic(err)
+		panic(NewHttpError(http.StatusBadRequest, "Error parsing form data", err))
 	}
 	filename := req.Form.Get("filename")
 	if filename == "" {
-		panic(fmt.Errorf("Expecting filename form value"))
+		panic(NewHttpError(http.StatusBadRequest, "Expecting filename form value", fmt.Errorf("No filename POST value")))
 	}
 
 	// Remove the file:
 	destPath := path.Join(picsDir, path.Base(filename))
 	if err := os.Remove(destPath); err != nil {
-		panic(err)
+		panic(NewHttpError(http.StatusBadRequest, "Unable to delete file", fmt.Errorf("Unable to delete file '%s': %s", destPath, err)))
 	}
 
 	return struct {
@@ -342,7 +327,7 @@ func main() {
 	// Set up the request multiplexer:
 	mux := http.NewServeMux()
 	rootURL = pjoin(proxyRoot, "/")
-	mux.HandleFunc(rootURL, indexHandler)
+	mux.Handle(rootURL, NewErrorHandler(indexHandler))
 
 	// Upload handler:
 	uploadURL = pjoin(proxyRoot, "/upload")

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 )
@@ -23,6 +24,23 @@ func (e HttpError) String() string {
 	return e.UserMessage
 }
 
+func getErrorDetails(panicked interface{}) (statusCode int, userMessage string, logError string) {
+	if herr, ok := panicked.(HttpError); ok {
+		statusCode = herr.StatusCode
+		logError = herr.Error()
+		userMessage = herr.UserMessage
+	} else if err, ok := panicked.(error); ok {
+		statusCode = http.StatusInternalServerError
+		logError = err.Error()
+		userMessage = "500 Internal Server Error"
+	} else {
+		statusCode = http.StatusInternalServerError
+		logError = fmt.Sprintf("%s", panicked)
+		userMessage = "500 Internal Server Error"
+	}
+	return
+}
+
 type ErrorHandler struct {
 	handler http.HandlerFunc
 }
@@ -39,16 +57,10 @@ func (h ErrorHandler) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 
 	// Log errors and return desired HTTP status code:
 	if pnk != nil {
-		if herr, ok := pnk.(HttpError); ok {
-			log.Printf("ERROR: %s\n", herr.Error())
-			http.Error(rsp, herr.UserMessage, herr.StatusCode)
-		} else if err, ok := pnk.(error); ok {
-			log.Printf("ERROR: %s\n", err.Error())
-			http.Error(rsp, "500 Internal Server Error", http.StatusInternalServerError)
-		} else {
-			log.Printf("ERROR: %s\n", pnk)
-			http.Error(rsp, "500 Internal Server Error", http.StatusInternalServerError)
-		}
+		statusCode, userMessage, logError := getErrorDetails(pnk)
+
+		log.Printf("ERROR: %s\n", logError)
+		http.Error(rsp, userMessage, statusCode)
 		return
 	}
 }
