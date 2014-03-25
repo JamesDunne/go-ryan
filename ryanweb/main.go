@@ -4,7 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"html/template"
-	//"image"
+	"image"
 	"image/jpeg"
 	"io"
 	"log"
@@ -263,10 +263,42 @@ func thumbHandler(rsp http.ResponseWriter, req *http.Request) {
 			panic(NewHttpError(http.StatusInternalServerError, "could not create thumbnail file", fmt.Errorf("could not create thumbnail file at '%s'; %s", thumbPath, err)))
 		}
 
-		// TODO: calculate the largest square bounds for a thumbnail to preserve aspect ratio
+		// Calculate the largest square bounds for a thumbnail to preserve aspect ratio
+		b := img.Bounds()
+		srcBounds := b
+		dx, dy := b.Dx(), b.Dy()
+		if dx > dy {
+			offs := (dx - dy) / 2
+			srcBounds.Min.X += offs
+			srcBounds.Max.X -= offs
+		} else if dy > dx {
+			offs := (dy - dx) / 2
+			srcBounds.Min.Y += offs
+			srcBounds.Max.Y -= offs
+		} else {
+			// Already square.
+		}
 
-		thumbImg := resize.Resize(img, img.Bounds(), 64, 64)
+		//log.Printf("'%s': resize %v to %v\n", filename, b, srcBounds)
+
+		// Cut out the center square to a new image:
+		var boximg image.Image
+		switch img := img.(type) {
+		case *image.RGBA:
+			boximg = img.SubImage(srcBounds)
+		case *image.YCbCr:
+			boximg = img.SubImage(srcBounds)
+		}
+
+		//log.Printf("'%s': resized to %v\n", filename, boximg.Bounds())
+
+		// Apply resizing algorithm:
+		thumbImg := resize.Resize(boximg, boximg.Bounds(), 96, 96)
+
+		// Encode to JPEG:
+		//log.Printf("'%s': JPEG encode\n", filename)
 		err = jpeg.Encode(tf, thumbImg, &jpeg.Options{Quality: 90})
+
 		if err != nil {
 			panic(NewHttpError(http.StatusInternalServerError, "error while encoding JPEG", fmt.Errorf("failed encoding JPEG for '%s': %s", thumbPath, err)))
 		}

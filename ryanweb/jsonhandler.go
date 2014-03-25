@@ -23,13 +23,13 @@ func (h JsonHandler) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 	rsp.Header().Add("Content-Type", "application/json; charset=utf-8")
 
 	// Try to run the handler logic and catch any panics:
-	pnk := try(func() {
+	pnk, stackTrace := try(func() {
 		result = h.handler(req)
 	})
 
 	// Handle the panic:
 	if pnk != nil {
-		statusCode, userMessage, logError := getErrorDetails(pnk)
+		statusCode, userMessage, logError := getErrorDetails(pnk, stackTrace)
 
 		// Log the private error details:
 		log.Printf("ERROR: %s\n", logError)
