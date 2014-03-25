@@ -4,9 +4,10 @@
 <head>
     <script type="text/javascript" src="//code.jquery.com/jquery-1.11.0.min.js"></script>
     <style>
-body    { font: tahoma; }
+body    { font: arial,sans-serif; background: black; color: #aaa; }
 th      { text-align: left; }
 th,td   { white-space: nowrap; }
+img.thumb { width: 64px; height: 64px; }
     </style>
 </head>
 <body>
@@ -17,7 +18,7 @@ th,td   { white-space: nowrap; }
             <input type="submit" value="Upload" />
         </form>
     </div>
-    <div>
+    <div style="margin-left: 2em">
         <h3>Uploaded files:</h3>
         <table border="0" cellspacing="2">
             <thead>
@@ -33,7 +34,7 @@ th,td   { white-space: nowrap; }
             <tbody>
 {{range .Files}}
                 <tr data-filename="{{.Name}}">
-                    <td>{{if eq .Mime "image/jpeg"}}<img src="{{.ThumbURL}}" alt="{{.Name}}" />{{end}}</td>
+                    <td>{{if eq .Mime "image/jpeg"}}<img src="{{.ThumbURL}}" alt="{{.Name}}" class="thumb" />{{end}}</td>
                     <td><a href="{{.PicURL}}" target="_blank">{{.Name}}</a></td>
                     <td>{{.LastMod}}</td>
                     <td style="text-align: right">{{.Size}}</td>
